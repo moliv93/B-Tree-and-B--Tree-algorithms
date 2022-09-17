@@ -12,10 +12,6 @@ public:
     bool isLeaf = true;
     bool isRoot = false;
 
-    Page() {
-
-    }
-
     // full means the node has the maximum number of keys to be stable
     bool isFull() {
         return n == t-1;

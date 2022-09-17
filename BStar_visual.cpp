@@ -1,3 +1,4 @@
+/* Author: Tiago Meneses de Oliveira */
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #define STB_IMAGE_IMPLEMENTATION
@@ -25,7 +26,6 @@ int windowHei = 600;
 
 #define M 5
 
-bool debugReportsActive = false;
 bool updateProjection = false;
 
 class Page;
@@ -33,15 +33,6 @@ class Page;
 struct Vector2i {
     int x = 0;
     int y = 0;
-};
-
-struct SplitData {
-    bool splitted;
-    bool full;
-    bool overflown;
-    int midKey;
-    int lastKey;
-    Page* newPage;
 };
 
 class Page {
@@ -52,16 +43,352 @@ public:
     Page* links[M+1] = {};
     bool isLeaf = true;
     bool isRoot = false;
-    Page* sibling = nullptr;
 
     Vector2i pos;
+
+// tree related functions
+
+    bool isFull() {
+        return n == t-1;
+    }
+
+    bool isOverflown() {
+        return n == t;
+    }
+
+    void shiftRight() {
+        if (n == t) {
+            printf("ATTEMPT TO SHIFT RIGHT ON A FULL PAGE\n");
+        }
+        links[n+1] = links[n];
+        for (int i=n; i>0; i--) {
+            keys[i] = keys[i-1];
+            links[i] = links[i-1];
+        }
+        n++;
+    }
+
+    void shiftLeft() {
+        for (int i=0; i<n-1; i++) {
+            keys[i] = keys[i+1];
+            links[i] = links[i+1];
+        }
+        links[n-1] = links[n];
+        links[n] == nullptr;
+        n--;
+    }
+
+    void setLeftmostKey(int substitute) {
+        if (!isLeaf) {
+            if (links[0]->isFull()) {
+                // if is full, bring last key to this node
+                shiftRight();
+                keys[0] = links[0]->keys[n-1];
+                links[0]->n--;
+            }
+            links[0]->setLeftmostKey(substitute);
+        }
+        else {
+            shiftRight();
+            keys[0] = substitute;
+        }
+    }
+
+    Page* getLeftmostPage() {
+        if (!isLeaf) {
+            return links[0]->getLeftmostPage();
+        }
+        return this;
+    }
+
+    Page* getRightmostPage() {
+        if (!isLeaf) {
+            return links[n]->getRightmostPage();
+        }
+        return this;
+    }
+
+    // insert at this page, and not at nodes below
+    void insertAtPage(int _key) {
+        int i=0;
+        while (i < n && keys[i] < _key) { i++; }
+        // insert node at this position
+        for (int j=n; j>i; j--) {
+            keys[j] = keys[j-1];
+        }
+        n++;
+        keys[i] = _key;
+        if (isOverflown() && isRoot) {
+            rootSplit();
+        }
+    }
+
+    void split(int leftPage, int rightPage) {
+        int totalLength = links[leftPage]->n + links[rightPage]->n;
+        int third = totalLength/3;
+        int keyGroup[totalLength];
+        int groupPos = 0;
+        Page* linksGroup[totalLength+2] = {}; // each page has n+1 links, so 2 more spaces are needed
+        int linkPos = 0;
+        // copy all data to buffer, ordered
+        for (int i=0; i<links[leftPage]->n; i++) {
+            keyGroup[groupPos] = links[leftPage]->keys[i];
+            groupPos++;
+        }
+        // and copy the links to the pages
+        for (int i=0; i<=links[leftPage]->n; i++) {
+            linksGroup[linkPos] = links[leftPage]->links[i];
+            linkPos++;
+        }
+
+        // the key in the parent also counts in the array
+        keyGroup[groupPos] = keys[leftPage];
+        groupPos++;
+        int copyStart=0;
+        // but in case the split is done at leaf nodes, the parent element is already included, and the first key is skipped
+        if (links[rightPage]->isLeaf) { copyStart++; }
+        for (int i=copyStart; i<links[rightPage]->n; i++) {
+            keyGroup[groupPos] = links[rightPage]->keys[i];
+            groupPos++;
+        }
+
+        //also, copy the links of the right pages
+        for (int i=0; i<=links[rightPage]->n; i++) {
+            linksGroup[linkPos] = links[rightPage]->links[i];
+            linkPos++;
+        }
+
+        // shifts parent elements to right by one position
+        for (int i=n; i>=rightPage; i--) {
+            keys[i] = keys[i-1];
+            links[i+1] = links[i];
+        }
+        n++;
+        // create new page at unnocupied link position
+        links[rightPage+1] = new Page();
+        // the new page leaf status is the same as the siblings
+        links[rightPage+1]->isLeaf = links[rightPage]->isLeaf;
+        // copy all data to designed points
+        // copy first third
+        links[leftPage]->n = 0;
+        for (int i=0; i<third; i++) {
+            links[leftPage]->insertAtPage(keyGroup[i]);
+        }
+        // copy second third
+        links[rightPage]->n = 0;
+        for (int i=third; i<third*2; i++) {
+            links[rightPage]->insertAtPage(keyGroup[i]);
+        }
+        // copy last third
+        links[rightPage+1]->n = 0;
+        for (int i=third*2; i<groupPos; i++) {
+            links[rightPage+1]->insertAtPage(keyGroup[i]);
+        }
+
+        // now, return the child pages to apropriate position
+        int linkIterator = 0;
+        // copy first third links
+        for (int i=0; i<=links[leftPage]->n; i++) {
+            links[leftPage]->links[i] = linksGroup[linkIterator];
+            linkIterator++;
+        }
+        // the last link of the page must be divided
+        Page* halfSplit = nullptr;
+        if (!links[leftPage]->isLeaf) {
+            halfSplit = new Page();
+            Page* lastLeaf = links[leftPage]->links[links[leftPage]->n];
+            for (int i = lastLeaf->n/2; i < lastLeaf->n; i++) {
+                halfSplit->insertAtPage(lastLeaf->keys[i]);
+            }
+            lastLeaf->n = lastLeaf->n/2;
+        }
+
+        // copy second third links
+        links[rightPage]->links[0] = halfSplit; // no need to increase link iterator, because it is not at linkGroup array
+        for (int i=1; i<=links[rightPage]->n; i++) {
+            links[rightPage]->links[i] = linksGroup[linkIterator];
+            linkIterator++;
+        }
+        // the last link of the page must be divided
+        halfSplit = nullptr;
+        if (!links[rightPage]->isLeaf) {
+            halfSplit = new Page();
+            Page* lastLeaf = links[rightPage]->links[links[rightPage]->n];
+            for (int i = lastLeaf->n/2; i < lastLeaf->n; i++) {
+                halfSplit->insertAtPage(lastLeaf->keys[i]);
+            }
+            lastLeaf->n = lastLeaf->n/2;
+        }
+
+        // copy last third links
+        links[rightPage+1]->links[0] = halfSplit; // no need to increase link iterator, because it is not at linkGroup array
+        for (int i=1; i<=links[rightPage+1]->n; i++) {
+            links[rightPage+1]->links[i] = linksGroup[linkIterator];
+            linkIterator++;
+        }
+        // as the last of links, it doesn't need to be splitted
+
+        keys[leftPage] = links[rightPage]->getLeftmostPage()->keys[0];
+        keys[rightPage] = links[rightPage+1]->getLeftmostPage()->keys[0];
+    }
+
+    void insert(int _key) {
+        // initial state of tree is done here, until initial split
+        if (isLeaf) {
+            insertAtPage(_key);
+            if (isRoot && isOverflown()) {
+                rootSplit();
+            }
+            return;
+        }
+
+        int i=0;
+        while (i < n && keys[i] < _key) { i++; }
+        links[i]->insert(_key);
+        if (links[i]->isOverflown()) {
+
+            // find case that conforms with child location
+            if (i == 0) { // if this is the first child, it can only send nodes to right
+                if (links[i+1]->isFull()) {
+                    split(i, i+1);
+                }
+                else {
+                    // unified spill
+                    // next opage NEEDS to be shifted right now
+                    links[i+1]->shiftRight();
+                    // in case the next node has children, the key must be set now, otherwise, it will be copied later
+                    if (!links[i+1]->isLeaf) { links[i+1]->keys[0] = keys[i]; }
+                    // sets the new parent key copy as last of prev node
+                    keys[i] = links[i]->keys[links[i]->n-1];
+                    links[i+1]->links[0] = links[i]->links[links[i]->n];
+                    // in case the page is a leaf, it needs a copy of parent key
+                    if (links[i+1]->isLeaf) { links[i+1]->keys[0] = keys[i]; }
+                    links[i]->n--;
+
+                    // separated logic for spill, might be easier to understand
+                    // if (links[i]->isLeaf) {
+                    //     if (links[i+1]->isLeaf) { links[i+1]->shiftRight(); }
+                    //     keys[i] = links[i]->keys[links[i]->n-1];
+                    //     links[i+1]->keys[0] = keys[i];
+                    //     links[i]->n--;
+                    // }
+                    // else {
+                    // // non-leaf
+                    //     if (!links[i+1]->isLeaf) { links[i+1]->shiftRight(); }
+                    //     links[i+1]->keys[0] = keys[i];
+                    //     links[i+1]->links[0] = links[i]->links[links[i]->n];
+                    //     keys[i] = links[i]->keys[links[i]->n-1];
+                    //     links[i]->n--;
+                    // }
+                }
+            }
+            else if (i == n) { // if this is the last, it can only send nodes left
+                if (links[i-1]->isFull()) {
+                    split(i-1, i);
+                }
+                else {
+                    // push first element to the left
+                    // push key at parent to prev node
+                    links[i-1]->insertAtPage(keys[i-1]);
+                    // leftmost page gets "rotated" to left side
+                    links[i-1]->links[links[i-1]->n] = links[i]->links[0];
+                    // next, the order of shifting shall differ from leaf and non-leaf nodes
+                    // possible substitution: create a function to find first non-equal key at this page
+                    // decrease the first element of the page
+                    if (links[i]->isLeaf) { links[i]->shiftLeft(); }
+                    // scale the new first element to list of keys
+                    keys[i-1] = links[i]->keys[0];
+                    // decrease the first element of the page
+                    if (!links[i]->isLeaf) { links[i]->shiftLeft(); }
+                }
+            }
+            else { // if is in the middle, we can choose direction
+                if (links[i+1]->n <= links[i-1]->n) {
+                    // if right node has less keys than left node, it is better to pass keys to right
+                    if (links[i+1]->isFull()) {
+                        split(i, i+1);
+                    }
+                    else {
+                        // unified spill
+                        // next opage NEEDS to be shifted right now
+                        links[i+1]->shiftRight();
+                        // in case the next node has children, the key must be set now, otherwise, it will be copied later
+                        if (!links[i+1]->isLeaf) { links[i+1]->keys[0] = keys[i]; }
+                        // sets the new parent key copy as last of prev node
+                        keys[i] = links[i]->keys[links[i]->n-1];
+                        links[i+1]->links[0] = links[i]->links[links[i]->n];
+                        // in case the page is a leaf, it needs a copy of parent key
+                        if (links[i+1]->isLeaf) { links[i+1]->keys[0] = keys[i]; }
+                        links[i]->n--;
+                    }
+                }
+                else {
+                    // in this case, left has less keys, and receive the excess of keys
+                    if (links[i-1]->isFull()) {
+                        split(i-1, i);
+                    }
+                    else {
+                        // push first element to the left
+                        // push key at parent to prev node
+                        links[i-1]->insertAtPage(keys[i-1]);
+                        // leftmost page gets "rotated" to left side
+                        links[i-1]->links[links[i-1]->n] = links[i]->links[0];
+                        // next, the order of shifting shall differ from leaf and non-leaf nodes
+                        // possible substitution: create a function to find first non-equal key at this page
+                        // decrease the first element of the page
+                        if (links[i]->isLeaf) { links[i]->shiftLeft(); }
+                        // scale the new first element to list of keys
+                        keys[i-1] = links[i]->keys[0];
+                        // decrease the first element of the page
+                        if (!links[i]->isLeaf) { links[i]->shiftLeft(); }
+                    }
+                }
+            }
+        }
+        // as this will not return anywhere, rootSplit has to be done here
+        if (isRoot && isOverflown()) {
+            rootSplit();
+        }
+    }
+
+    void rootSplit() {
+        Page* preHalf = new Page();
+        Page* postHalf = new Page();
+        int halfPos = n/2;
+
+        for (int i=0; i<halfPos; i++) {
+            preHalf->keys[i] = keys[i];
+            preHalf->links[i] = links[i];
+        }
+        preHalf->links[halfPos] = links[halfPos];
+        preHalf->n = halfPos;
+
+        // only copies mid element IF childs are leafs, else, mid element is already present at leaf level
+        int copyPos = halfPos;
+        if (links[0] != nullptr) { copyPos = halfPos + 1; }
+        for (int i=copyPos; i<=n; i++) {
+            postHalf->keys[i-(copyPos)] = keys[i];
+            postHalf->links[i-(copyPos)] = links[i];
+        }
+        postHalf->links[n-copyPos] = links[n];
+        postHalf->n = n-copyPos;
+
+        keys[0] = keys[halfPos];
+        links[0] = preHalf;
+        links[1] = postHalf;
+        n = 1;
+        isLeaf = false;
+        if (preHalf->links[0] != nullptr) {preHalf->isLeaf = false;}
+        if (postHalf->links[0] != nullptr) {postHalf->isLeaf = false;}
+    }
+
+// positioning-related functions
 
     void updatePos(Vector2i ref) {
         pos.x = ref.x;
         pos.y = ref.y;
 
         for (int i=0; i<=n; i++) {
-            // printf("DRAW LINKS\n");
             if (links[i] != nullptr) {
                 Vector2i newPos;
                 newPos.x = pos.x;
@@ -135,14 +462,7 @@ public:
         }
         Vector2i left = getLeftmostPosition();
         Vector2i right = getRightmostPosition();
-        if (isRoot) {
-            // printf("left leaf pos: %d\n", left.x);
-            // printf("right leaf pos: %d\n", right.x);
-        }
         pos.x = left.x + ((right.x - left.x)/2);
-        if (isRoot) {
-            // printf("pos: %d\n", pos.x);
-        }
 
         for (int i=0; i<=n; i++) {
             links[i]->alignParents(anchorPosition);
@@ -159,20 +479,16 @@ public:
     }
 
     void updatePositions(glm::mat4& projection) {
-        // printf("start update\n");
         int leavesCellCount = 0;
         countLeaves(leavesCellCount);
-        // printf("leaves counted\n");
         int totalCellLength = leavesCellCount * 50;
         int leafIndex = 0;
         alignLeavesPosition(leafIndex, -totalCellLength/2);
-        // printf("leaves aligned\n");
         alignParents(-totalCellLength/2);
-        // printf("parents aligned\n");
         updateHeight(0);
-        // printf("height updated\n");
-        // std::vector<std::pair<int, int>> leafs;
     }
+
+// drawing-related functions
 
     void draw(unsigned int tfmLoc) {
         glm::vec2 transform(pos.x, pos.y);
@@ -197,16 +513,12 @@ public:
             glm::vec2 fontTransform = transform;
             for (int i=0; i<key.length(); i++) {
                 char cpos = key.c_str()[i];
-                // glm::vec4 crop( (1.0f/110.0f)*(0), (1.0f/110.0f)*0, (1.0f/110.0f), (1.0f/110.0f));
-                // printf("cpos: %d\n", cpos);
                 glm::vec4 crop( (1.0f/16.0f)*(cpos%16), (1.0f/8.0f)*(cpos/16), (1.0f/16.0f), (1.0f/8.0f));
                 glUniform2fv(transformLoc, 1, glm::value_ptr(fontTransform));
                 glUniform4fv(cropLoc, 1, glm::value_ptr(crop));
                 glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
                 fontTransform.x += 10;
             }
-            // glUniform2fv(tfmLoc, 1, glm::value_ptr(transform));
-            // glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
             transform.x += 50;
         }
 
@@ -230,436 +542,6 @@ public:
 
             links[i]->drawLinks(shaderProgram);
         }
-    }
-
-    Page() {
-
-    }
-
-    void report() {
-        if (debugReportsActive) {
-            printf("call from %s\n", isRoot ? "root" : "child");
-            printf("call from %s leaf node\n", isLeaf ? "" : "non");
-            printf("%d nodes in this page\n", n);
-            printf("keys: ");
-            if (n) {
-                for (int i=0; i<n; i++) { printf("%d ", keys[i]);}
-            }
-            printf("\n");
-        }
-    }
-
-    bool isFull() {
-        return n == t-1;
-    }
-
-    bool isOverflown() {
-        return n == t;
-    }
-
-    void shiftRight() {
-        if (n == t) {
-            printf("ATTEMPT TO SHIFT RIGHT ON A FULL PAGE\n");
-        }
-        links[n+1] = links[n];
-        for (int i=n; i>0; i--) {
-            keys[i] = keys[i-1];
-            links[i] = links[i-1];
-        }
-        n++;
-    }
-
-    void shiftLeft() {
-        for (int i=0; i<n-1; i++) {
-            keys[i] = keys[i+1];
-            links[i] = links[i+1];
-        }
-        links[n-1] = links[n];
-        links[n] == nullptr;
-        n--;
-    }
-
-    void setLeftmostKey(int substitute) {
-        if (!isLeaf) {
-            if (links[0]->isFull()) {
-                // if is full, bring last key to this node
-                shiftRight();
-                keys[0] = links[0]->keys[n-1];
-                links[0]->n--;
-            }
-            links[0]->setLeftmostKey(substitute);
-        }
-        else {
-            printf("substitute set\n");
-            // shifts and sets first key to parent caller value
-            shiftRight();
-            keys[0] = substitute;
-        }
-    }
-
-    Page* getLeftmostPage() {
-        if (!isLeaf) {
-            return links[0]->getLeftmostPage();
-        }
-        return this;
-    }
-
-    Page* getRightmostPage() {
-        if (!isLeaf) {
-            return links[n]->getRightmostPage();
-        }
-        return this;
-    }
-
-    Page* split2by3(Page* p1, Page* p2, int kp, int& k1, int& k2) {
-        int totalLength = p1->n + p2->n + 1; // calculate total keys
-        Page* p3 = new Page(); // create new trird page
-        int third = totalLength/3; // calculate 1/3 of total cell size, and n os the new pages
-        int k1Pos = third; // gets position for key of parent 1
-        int k2Pos = p2->n - third; // gets position for key of parent 2
-        k1 = p1->keys[k1Pos]; // gets actual key
-        k2 = p2->keys[k2Pos];
-        int i;
-        // copies second part of p2 to p3
-        for (i = k2Pos+1; i < p2->n; i++) {
-            p3->insert(p2->keys[i]);
-        }
-        p2->n = k2Pos; // "cuts" content copied from p2
-        for (i = p1->n-1; i > k1Pos; i--) { // copies last elements of p1 to beginning of p2
-            // p2->shiftRight();
-            // p2->keys[0] = p1->keys[i];
-            p2->insert(p1->keys[i]);
-        }
-        p2->insert(kp); // insert element that was parent of nodes
-        p1->n = k1Pos;
-        return p3;
-    }
-
-    // insert at this page, and not at nodes below
-    void insertAtPage(int _key) {
-        int i=0;
-        while (i < n && keys[i] < _key) { i++; }
-        // insert node at this position
-        for (int j=n; j>i; j--) {
-            keys[j] = keys[j-1];
-        }
-        n++;
-        keys[i] = _key;
-        if (isOverflown() && isRoot) {
-            // printf("root overflown\n");
-            rootSplit();
-        }
-    }
-
-    void split(int leftPage, int rightPage) {
-        printf("splits of %d and %d\n", links[leftPage]->keys[0], links[rightPage]->keys[0]);
-        int totalLength = links[leftPage]->n + links[rightPage]->n;
-        int third = totalLength/3;
-        printf("total length: %d\n", totalLength);
-        printf("third: %d\n", third);
-        int keyGroup[totalLength];
-        int groupPos = 0;
-        Page* linksGroup[totalLength+2] = {}; // each page has n+1 links, so 2 more spaces are needed
-        int linkPos = 0;
-        // copy all data to buffer, ordered
-        for (int i=0; i<links[leftPage]->n; i++) {
-            keyGroup[groupPos] = links[leftPage]->keys[i];
-            printf("keys is %d\n", links[leftPage]->keys[i]);
-            groupPos++;
-        }
-        // and copy the links to the pages
-        for (int i=0; i<=links[leftPage]->n; i++) {
-            linksGroup[linkPos] = links[leftPage]->links[i];
-            linkPos++;
-        }
-
-        printf("Keys:\n");
-        for (int i=0; i<groupPos; i++) {
-            printf("%d, ", keyGroup[i]);
-        }
-        printf("\n");
-        // the key in the parent also counts in the array
-        keyGroup[groupPos] = keys[leftPage];
-        groupPos++;
-        int copyStart=0;
-        // but in case the split is done at leaf nodes, the parent element is already included, and the first key is skipped
-        if (links[rightPage]->isLeaf) { copyStart++; }
-        for (int i=copyStart; i<links[rightPage]->n; i++) {
-            keyGroup[groupPos] = links[rightPage]->keys[i];
-            groupPos++;
-        }
-
-        printf("Keys:\n");
-        for (int i=0; i<groupPos; i++) {
-            printf("%d, ", keyGroup[i]);
-        }
-        printf("\n");
-
-        //also, copy the links of the right pages
-        for (int i=0; i<=links[rightPage]->n; i++) {
-            linksGroup[linkPos] = links[rightPage]->links[i];
-            linkPos++;
-        }
-        printf(" linkPos: %d\n groupPos: %d\n totalLength: %d\n", linkPos, groupPos, totalLength);
-
-        printf("Keys:\n");
-        for (int i=0; i<groupPos; i++) {
-            printf("%d, ", keyGroup[i]);
-        }
-        printf("\n");
-
-        printf("shifting\n");
-        // shifts parent elements to right by one position
-        for (int i=n; i>=rightPage; i--) {
-            keys[i] = keys[i-1];
-            links[i+1] = links[i];
-        }
-        n++;
-        printf("linking new page\n");
-        // create new page at unnocupied link position
-        links[rightPage+1] = new Page();
-        // the new page leaf status is the same as the siblings
-        links[rightPage+1]->isLeaf = links[rightPage]->isLeaf;
-        // copy all data to designed points
-        printf("copy first third\n");
-        links[leftPage]->n = 0;
-        for (int i=0; i<third; i++) {
-            links[leftPage]->insertAtPage(keyGroup[i]);
-        }
-        printf("copy second third\n");
-        links[rightPage]->n = 0;
-        for (int i=third; i<third*2; i++) {
-            links[rightPage]->insertAtPage(keyGroup[i]);
-        }
-        printf("copy last third\n");
-        links[rightPage+1]->n = 0;
-        for (int i=third*2; i<groupPos; i++) {
-            links[rightPage+1]->insertAtPage(keyGroup[i]);
-        }
-
-        // now, return the child pages to apropriate position
-        int linkIterator = 0;
-        printf("copy first third links\n");
-        for (int i=0; i<=links[leftPage]->n; i++) {
-            links[leftPage]->links[i] = linksGroup[linkIterator];
-            linkIterator++;
-        }
-        // the last link of the page must be divided
-        Page* halfSplit = nullptr;
-        if (!links[leftPage]->isLeaf) {
-            halfSplit = new Page();
-            Page* lastLeaf = links[leftPage]->links[links[leftPage]->n];
-            for (int i = lastLeaf->n/2; i < lastLeaf->n; i++) {
-                halfSplit->insertAtPage(lastLeaf->keys[i]);
-            }
-            lastLeaf->n = lastLeaf->n/2;
-        }
-
-        printf("copy second third links\n");
-        links[rightPage]->links[0] = halfSplit; // no need to increase link iterator, because it is not at linkGroup array
-        for (int i=1; i<=links[rightPage]->n; i++) {
-            links[rightPage]->links[i] = linksGroup[linkIterator];
-            linkIterator++;
-        }
-        // the last link of the page must be divided
-        halfSplit = nullptr;
-        if (!links[rightPage]->isLeaf) {
-            halfSplit = new Page();
-            Page* lastLeaf = links[rightPage]->links[links[rightPage]->n];
-            for (int i = lastLeaf->n/2; i < lastLeaf->n; i++) {
-                halfSplit->insertAtPage(lastLeaf->keys[i]);
-            }
-            lastLeaf->n = lastLeaf->n/2;
-        }
-
-        printf("copy last third links\n");
-        links[rightPage+1]->links[0] = halfSplit; // no need to increase link iterator, because it is not at linkGroup array
-        for (int i=1; i<=links[rightPage+1]->n; i++) {
-            links[rightPage+1]->links[i] = linksGroup[linkIterator];
-            linkIterator++;
-        }
-        // as the last of links, it doesn't need to be splitted
-
-        printf("copy last third\n");
-        links[rightPage+1]->n = 0;
-        for (int i=third*2; i<groupPos; i++) {
-            links[rightPage+1]->insertAtPage(keyGroup[i]);
-        }
-
-        keys[leftPage] = links[rightPage]->getLeftmostPage()->keys[0];
-        keys[rightPage] = links[rightPage+1]->getLeftmostPage()->keys[0];
-        printf("finishing splits\n");
-    }
-
-    void insert(int _key) {
-        // initial state of tree is done here, until initial split
-        if (isLeaf) {
-            insertAtPage(_key);
-            if (isRoot && isOverflown()) {
-                rootSplit();
-            }
-            return;
-        }
-
-        int i=0;
-        while (i < n && keys[i] < _key) { i++; }
-        links[i]->insert(_key);
-        if (links[i]->isOverflown()) {
-            printf("child node can't acomodate any more keys // performing rotation\n");
-
-            // find case that conforms with child location
-            if (i == 0) { // if this is the first child, it can only send nodes to right
-                if (links[i+1]->isFull()) {
-                    printf("PERFORM SPLIT HERE\n");
-                    // links[i]->insertAtPage(_key);
-                    split(i, i+1);
-                }
-                else {
-                    // unified spill
-                    printf("performs left-to-right spill\n");
-                    // next opage NEEDS to be shifted right now
-                    links[i+1]->shiftRight();
-                    // in case the next node has children, the key must be set now, otherwise, it will be copied later
-                    if (!links[i+1]->isLeaf) { links[i+1]->keys[0] = keys[i]; }
-                    // sets the new parent key copy as last of prev node
-                    keys[i] = links[i]->keys[links[i]->n-1];
-                    links[i+1]->links[0] = links[i]->links[links[i]->n];
-                    // in case the page is a leaf, it needs a copy of parent key
-                    if (links[i+1]->isLeaf) { links[i+1]->keys[0] = keys[i]; }
-                    links[i]->n--;
-                    printf("spill is done\n");
-
-
-                    // separated logic for spill, might be easier to understand
-                    // if (links[i]->isLeaf) {
-                    //     if (links[i+1]->isLeaf) { links[i+1]->shiftRight(); }
-                    //     keys[i] = links[i]->keys[links[i]->n-1];
-                    //     links[i+1]->keys[0] = keys[i];
-                    //     links[i]->n--;
-                    // }
-                    // else {
-                    // // non-leaf
-                    //     if (!links[i+1]->isLeaf) { links[i+1]->shiftRight(); }
-                    //     links[i+1]->keys[0] = keys[i];
-                    //     links[i+1]->links[0] = links[i]->links[links[i]->n];
-                    //     keys[i] = links[i]->keys[links[i]->n-1];
-                    //     links[i]->n--;
-                    // }
-                }
-            }
-            else if (i == n) { // if this is the last, it can only send nodes left
-                if (links[i-1]->isFull()) {
-                    printf("PERFORM SPLIT HERE\n");
-                    split(i-1, i);
-                }
-                else {
-                    // push first element to the left
-                    // push key at parent to prev node
-                    links[i-1]->insertAtPage(keys[i-1]);
-                    // leftmost page gets "rotated" to left side
-                    links[i-1]->links[links[i-1]->n] = links[i]->links[0];
-                    // next, the order of shifting shall differ from leaf and non-leaf nodes
-                    // possible substitution: create a function to find first non-equal key at this page
-                    // decrease the first element of the page
-                    if (links[i]->isLeaf) { links[i]->shiftLeft(); }
-                    // scale the new first element to list of keys
-                    keys[i-1] = links[i]->keys[0];
-                    // decrease the first element of the page
-                    if (!links[i]->isLeaf) { links[i]->shiftLeft(); }
-                }
-            }
-            else { // if is in the middle, we can choose direction
-                if (links[i+1]->n <= links[i-1]->n) {
-                    // if right node has less keys than left node, it is better to pass keys to right
-                    printf("MIDDLE-RIGHT PASS OF KEYS\n");
-                    if (links[i+1]->isFull()) {
-                        printf("PERFORM SPLIT HERE\n");
-                        // links[i]->insertAtPage(_key);
-                        split(i, i+1);
-                    }
-                    else {
-                        // unified spill
-                        printf("performs left-to-right spill\n");
-                        // next opage NEEDS to be shifted right now
-                        links[i+1]->shiftRight();
-                        // in case the next node has children, the key must be set now, otherwise, it will be copied later
-                        if (!links[i+1]->isLeaf) { links[i+1]->keys[0] = keys[i]; }
-                        // sets the new parent key copy as last of prev node
-                        keys[i] = links[i]->keys[links[i]->n-1];
-                        links[i+1]->links[0] = links[i]->links[links[i]->n];
-                        // in case the page is a leaf, it needs a copy of parent key
-                        if (links[i+1]->isLeaf) { links[i+1]->keys[0] = keys[i]; }
-                        links[i]->n--;
-                        printf("spill is done\n");
-                    }
-                }
-                else {
-                    // in this case, left has less keys, and receive the excess of keys
-                    printf("MIDDLE-LEFT PASS OF KEYS\n");
-                    if (links[i-1]->isFull()) {
-                        printf("PERFORM SPLIT HERE\n");
-                        split(i-1, i);
-                    }
-                    else {
-                        // push first element to the left
-                        // push key at parent to prev node
-                        links[i-1]->insertAtPage(keys[i-1]);
-                        // leftmost page gets "rotated" to left side
-                        links[i-1]->links[links[i-1]->n] = links[i]->links[0];
-                        // next, the order of shifting shall differ from leaf and non-leaf nodes
-                        // possible substitution: create a function to find first non-equal key at this page
-                        // decrease the first element of the page
-                        if (links[i]->isLeaf) { links[i]->shiftLeft(); }
-                        // scale the new first element to list of keys
-                        keys[i-1] = links[i]->keys[0];
-                        // decrease the first element of the page
-                        if (!links[i]->isLeaf) { links[i]->shiftLeft(); }
-                    }
-                }
-            }
-        }
-        // as this will not return anywhere, rootSplit has to be done here
-        if (isRoot && isOverflown()) {
-            rootSplit();
-        }
-    }
-
-    void rootSplit() {
-        printf("Preparing root split\n");
-        // self_draw(1);
-        Page* preHalf = new Page();
-        Page* postHalf = new Page();
-        int halfPos = n/2;
-
-        for (int i=0; i<halfPos; i++) {
-            preHalf->keys[i] = keys[i];
-            preHalf->links[i] = links[i];
-        }
-        preHalf->links[halfPos] = links[halfPos];
-        preHalf->n = halfPos;
-
-        // only copies mid element IF childs are leafs, else, mid element is already present at leaf level
-        int copyPos = halfPos;
-        if (links[0] != nullptr) { copyPos = halfPos + 1; }
-        for (int i=copyPos; i<=n; i++) {
-            postHalf->keys[i-(copyPos)] = keys[i];
-            postHalf->links[i-(copyPos)] = links[i];
-        }
-        postHalf->links[n-copyPos] = links[n];
-        postHalf->n = n-copyPos;
-
-        keys[0] = keys[halfPos];
-        links[0] = preHalf;
-        links[1] = postHalf;
-        n = 1;
-        // preHalf->isRoot = false;
-        // postHalf->isRoot = false
-        isLeaf = false;
-        if (preHalf->links[0] != nullptr) {preHalf->isLeaf = false;}
-        if (postHalf->links[0] != nullptr) {postHalf->isLeaf = false;}
-
-        if (preHalf->isLeaf) { preHalf->sibling = postHalf; }
-        printf("Root split done\n");
     }
 
     void self_draw(int level) {
@@ -870,8 +752,6 @@ int main(int argc, char *argv[]) {
     glBindVertexArray(0);
 
     glm::mat4 viewMatrix = glm::mat4(1.0f);
-    // viewMatrix = glm::translate(viewMatrix, glm::vec3(50.0f, 0.0f, 0.0f));
-    // viewMatrix = glm::rotate(viewMatrix, (float)glfwGetTime(), glm::vec3(0.0f, 0.0f, 1.0f));
 
     Page btree;
     btree.isRoot = true;
@@ -937,9 +817,6 @@ int main(int argc, char *argv[]) {
             bgChangeCooldown = 0.2;
         }
         lastTimeRecord = actualTimeRecord;
-        // viewMatrix = glm::rotate(viewMatrix, 0.01f, glm::vec3(0.0f, 0.0f, 1.0f));
-        // if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS)
-        //     printf("right\n");
         glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         glBindBuffer(GL_ARRAY_BUFFER, VBO);
@@ -953,9 +830,7 @@ int main(int argc, char *argv[]) {
         glm::vec2 transform = glm::vec2(0.0f, 0.0f);
 
         int transformLoc = glGetUniformLocation(textureSP, "transform");
-        // std::cout << transformLoc << std::endl;
         int projectionLoc = glGetUniformLocation(textureSP, "projection");
-        // std::cout << "cell projection " << projectionLoc << std::endl;
         if (projectionLoc < 0) {
             std::cout << "fail getting projection uniform location\n";
         }
@@ -989,45 +864,22 @@ int main(int argc, char *argv[]) {
         btree.draw(transformLoc);
 
         glUseProgram(textSP);
-        // glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, fontTexture);
 
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, TEBO);
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(fontIndices), fontIndices, GL_STATIC_DRAW);
 
-        // std::cout << glGetError() << std::endl;
         transformLoc = glGetUniformLocation(textSP, "transform");
         projectionLoc = glGetUniformLocation(textSP, "projection");
         int cropLoc = glGetUniformLocation(textSP, "crop");
         viewLoc = glGetUniformLocation(textSP, "view");
-        // std::cout << "transform " << transformLoc << std::endl;
-        // std::cout << "projection " << projectionLoc << std::endl;
-        // std::cout << "crop " << cropLoc << std::endl;
-        // std::cout << "view " << viewLoc << std::endl;
-
-        int errorIndex = 0;
-        GLenum errorCode = glGetError();
-        while (errorCode != GL_NO_ERROR) {
-            std::cout << errorIndex << ": " << errorCode << std::endl;
-            errorIndex++;
-            errorCode = glGetError();
-        }
-
 
         glm::mat4 fontViewMatrix = viewMatrix;
         glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, glm::value_ptr(projection));
         glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(viewMatrix));
         btree.writeKeyNumbers(transformLoc, cropLoc, fontWidth, fontHeight, fontIndices);
-        // int errorIndex = 0;
-        // GLenum errorCode = glGetError();
-        // while (errorCode != GL_NO_ERROR) {
-        //     std::cout << errorIndex << ": " << std::hex << errorCode << std::endl;
-        //     errorIndex++;
-        //     errorCode = glGetError();
-        // }
 
         glUseProgram(lineSP);
-        // glBindTexture(GL_TEXTURE_2D, cellTexture);
 
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
@@ -1040,11 +892,7 @@ int main(int argc, char *argv[]) {
 
         glfwSwapBuffers(window);
         glfwPollEvents();
-
-        // std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
-
-    // std::this_thread::sleep_for(std::chrono::milliseconds(10000));
     glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
     glDeleteBuffers(1, &EBO);

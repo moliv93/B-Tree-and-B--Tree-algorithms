@@ -1,3 +1,4 @@
+/* Author: Tiago Meneses de Oliveira */
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #define STB_IMAGE_IMPLEMENTATION
@@ -22,15 +23,11 @@ const float SCR_HEIGHT = 600;
 
 #define M 5
 
-bool debugReportsActive = true;
-
 class Page;
 
 struct Vector2i {
     int x = 0;
     int y = 0;
-
-    // Vector2i(float _x, float _y) { x = _x; y = _y; }
 };
 
 struct SplitData {
@@ -50,12 +47,145 @@ public:
 
     Vector2i pos;
 
+// tree-related functions
+
+    SplitData insert(int _key) {
+        SplitData spd;
+        if (!isLeaf) {
+            int i=0;
+            while (keys[i] < _key && i < n) { i++; } // search point of intermediate value
+            spd = links[i]->insert(_key);
+            if (spd.splitted) {
+                spd.splitted = false; // stop split flag backing up, this can be changed by split() call below
+                // keys[n] = spd.midKey; // change to smart push
+
+                int i=0;
+                while (i < n && keys[i] < spd.midKey) { i++; }
+                if (i < n)
+                    links[n+1] = links[n];
+                    for (int j=n; j>i; j--) {
+                        keys[j] = keys[j-1];
+                        links[j] = links[j-1];
+                    }
+                keys[i] = spd.midKey;
+                links[i+1] = spd.newPage;
+                n++;
+
+                if (n == t) {
+                    if (!isRoot) {
+                        spd = split();
+                    }
+                    else {
+                        rootSplit();
+                    }
+                }
+                return spd;
+            }
+        }
+        else {
+            spd.splitted = false;
+            int i=0;
+            while (i < n && keys[i] < _key) { i++; }
+            // make room for new element
+            if (i < n)
+                for (int j=n; j>i; j--) {
+                    keys[j] = keys[j-1];
+                }
+            keys[i] = _key;
+            // insert new element
+            n++;
+            if (n == t) {
+                if (isRoot) {
+                    rootSplit();
+                }
+                else {
+                    spd = split();
+                    // return spd;
+                }
+            }
+            if (n > t) {
+                std::cout << "PAGE BUFFER OVERFLOW!!!!!\n";
+            }
+            return spd;
+        }
+        return spd;
+    }
+
+    SplitData split() {
+        Page* secHalf = new Page(); // create new page
+        SplitData spd; // create return structure
+        spd.splitted = true; // confirm split
+        spd.newPage = secHalf; // associate new page return
+        int halfPos = n/2; // find mid position
+        spd.midKey = keys[halfPos]; // associate return value of key
+        // only mantains mid key if this page is leaf, or else, midkey is already at some leaf
+        int copyPos = halfPos;
+        if (!isLeaf) { copyPos = halfPos + 1; }
+        for (int i=copyPos; i<n; i++) { // copy post-half keys to new page
+            secHalf->insert(keys[i]);
+        }
+        for (int i=copyPos; i<=n; i++) {
+            secHalf->links[i-copyPos] = links[i];
+        }
+        n = halfPos;// sets n to new value
+        if (secHalf->links[0] != nullptr) {
+            secHalf->isLeaf = false;
+        }
+        return spd;
+    }
+
+    void rootSplit() {
+        Page* preHalf = new Page();
+        Page* postHalf = new Page();
+        int halfPos = n/2;
+
+        for (int i=0; i<halfPos; i++) {
+            preHalf->keys[i] = keys[i];
+            preHalf->links[i] = links[i];
+        }
+        preHalf->links[halfPos] = links[halfPos];
+        preHalf->n = halfPos;
+
+        // only copies mid element IF childs are leafs, else, mid element is already present at leaf level
+        int copyPos = halfPos;
+        if (links[0] != nullptr) { copyPos = halfPos + 1; }
+        for (int i=copyPos; i<=n; i++) {
+            postHalf->keys[i-(copyPos)] = keys[i];
+            postHalf->links[i-(copyPos)] = links[i];
+        }
+        postHalf->links[n-copyPos] = links[n];
+        postHalf->n = n-copyPos;
+
+        keys[0] = keys[halfPos];
+        links[0] = preHalf;
+        links[1] = postHalf;
+        n = 1;
+        isLeaf = false;
+        if (preHalf->links[0] != nullptr) {preHalf->isLeaf = false;}
+        if (postHalf->links[0] != nullptr) {postHalf->isLeaf = false;}
+    }
+
+    void self_draw(int level) {
+        printf("%d%s: [", level, isLeaf ? "yL" : "nL");
+        printf("%c", links[0] == nullptr ? '-' : '+');
+        for (int i=0; i<n; i++) {
+            printf("%d%c ", keys[i], links[i+1] == nullptr ? '-' : '+');
+        }
+        printf("]\n");
+        for (int i=0; i<=n; i++) {
+            if (links[i] != nullptr) {
+                links[i]->self_draw(level+1);
+            }
+        }
+    }
+
+// positioning-related functions
+
     void updatePos(Vector2i ref) {
         pos.x = ref.x;
         pos.y = ref.y;
 
         for (int i=0; i<=n; i++) {
-            // printf("DRAW LINKS\n");
             if (links[i] != nullptr) {
                 Vector2i newPos;
                 newPos.x = pos.x;
@@ -130,14 +260,7 @@ public:
         }
         Vector2i left = getLeftmostPosition();
         Vector2i right = getRightmostPosition();
-        if (isRoot) {
-            // printf("left leaf pos: %d\n", left.x);
-            // printf("right leaf pos: %d\n", right.x);
-        }
         pos.x = left.x + ((right.x - left.x)/2);
-        if (isRoot) {
-            // printf("pos: %d\n", pos.x);
-        }
 
         for (int i=0; i<=n; i++) {
             links[i]->alignParents(anchorPosition);
@@ -154,20 +277,16 @@ public:
     }
 
     void updatePositions(glm::mat4& projection) {
-        // printf("start update\n");
         int leavesCellCount = 0;
         countLeaves(leavesCellCount);
-        // printf("leaves counted\n");
         int totalCellLength = leavesCellCount * 50;
         int leafIndex = 0;
         alignLeavesPosition(leafIndex, -totalCellLength/2);
-        // printf("leaves aligned\n");
         alignParents(-totalCellLength/2);
-        // printf("parents aligned\n");
         updateHeight(0);
-        // printf("height updated\n");
-        // std::vector<std::pair<int, int>> leafs;
     }
+
+// drawing-related functions
 
     void draw(unsigned int tfmLoc) {
         glm::vec2 transform(pos.x, pos.y);
@@ -192,16 +311,12 @@ public:
             glm::vec2 fontTransform = transform;
             for (int i=0; i<key.length(); i++) {
                 char cpos = key.c_str()[i];
-                // glm::vec4 crop( (1.0f/110.0f)*(0), (1.0f/110.0f)*0, (1.0f/110.0f), (1.0f/110.0f));
-                // printf("cpos: %d\n", cpos);
                 glm::vec4 crop( (1.0f/16.0f)*(cpos%16), (1.0f/8.0f)*(cpos/16), (1.0f/16.0f), (1.0f/8.0f));
                 glUniform2fv(transformLoc, 1, glm::value_ptr(fontTransform));
                 glUniform4fv(cropLoc, 1, glm::value_ptr(crop));
                 glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
                 fontTransform.x += 10;
             }
-            // glUniform2fv(tfmLoc, 1, glm::value_ptr(transform));
-            // glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
             transform.x += 50;
         }
 
@@ -224,169 +339,6 @@ public:
             glDrawElements(GL_LINES, 2, GL_UNSIGNED_INT, nullptr);
 
             links[i]->drawLinks(shaderProgram);
-        }
-    }
-
-    Page() {
-
-    }
-
-    void report() {
-        if (debugReportsActive) {
-            printf("call from %s\n", isRoot ? "root" : "child");
-            printf("call from %s leaf node\n", isLeaf ? "" : "non");
-            printf("%d nodes in this page\n", n);
-            printf("keys: ");
-            if (n) {
-                for (int i=0; i<n; i++) { printf("%d ", keys[i]);}
-            }
-            printf("\n");
-        }
-    }
-
-    SplitData insert(int _key) {
-        SplitData spd;
-        report();
-        if (!isLeaf) {
-            printf("key passing non-leaf node\n");
-            int i=0;
-            while (keys[i] < _key && i < n) { i++; } // search point of intermediate value
-            printf("inserting on node %d below\n", i);
-            spd = links[i]->insert(_key);
-            if (spd.splitted) {
-                spd.splitted = false; // stop split flag backing up, this can be changed by split() call below
-                // keys[n] = spd.midKey; // change to smart push
-
-                int i=0;
-                while (i < n && keys[i] < spd.midKey) { i++; }
-                if (i < n)
-                    links[n+1] = links[n];
-                    for (int j=n; j>i; j--) {
-                        keys[j] = keys[j-1];
-                        links[j] = links[j-1];
-                    }
-                keys[i] = spd.midKey;
-                links[i+1] = spd.newPage;
-                n++;
-
-                if (n == t) {
-                    if (!isRoot) {
-                        spd = split();
-                    }
-                    else {
-                        rootSplit();
-                    }
-                }
-                return spd;
-            }
-        }
-        else {
-            spd.splitted = false;
-            printf("key is at leaf node\n");
-            int i=0;
-            while (i < n && keys[i] < _key) { i++; }
-            // make room for new element
-            if (i < n)
-                for (int j=n; j>i; j--) {
-                    printf("fowarding\n");
-                    keys[j] = keys[j-1];
-                }
-            printf("Inserting %d at pos %d\n", _key, i);
-            keys[i] = _key;
-            // insert new element
-            n++;
-            if (n == t) {
-                if (isRoot) {
-                    rootSplit();
-                }
-                else {
-                    spd = split();
-                    // return spd;
-                }
-            }
-            if (n > t) {
-                std::cout << "PAGE BUFFER OVERFLOW!!!!!\n";
-            }
-            return spd;
-        }
-        return spd;
-    }
-
-    SplitData split() {
-        printf("Preparing split\n");
-        Page* secHalf = new Page(); // create new page
-        SplitData spd; // create return structure
-        spd.splitted = true; // confirm split
-        spd.newPage = secHalf; // associate new page return
-        int halfPos = n/2; // find mid position
-        spd.midKey = keys[halfPos]; // associate return value of key
-        printf("secHalf start\n");
-        secHalf->report();
-        // only mantains mid key if this page is leaf, or else, midkey is already at some leaf
-        int copyPos = halfPos;
-        if (!isLeaf) { copyPos = halfPos + 1; }
-        for (int i=copyPos; i<n; i++) { // copy post-half keys to new page
-            printf("copying %d\n", keys[i]);
-            secHalf->insert(keys[i]);
-        }
-        for (int i=copyPos; i<=n; i++) {
-            secHalf->links[i-copyPos] = links[i];
-        }
-        n = halfPos;// sets n to new value
-        if (secHalf->links[0] != nullptr) {
-            secHalf->isLeaf = false;
-        }
-        printf("Split done\n");
-        return spd;
-    }
-
-    void rootSplit() {
-        printf("Preparing root split\n");
-        // self_draw(1);
-        Page* preHalf = new Page();
-        Page* postHalf = new Page();
-        int halfPos = n/2;
-
-        for (int i=0; i<halfPos; i++) {
-            preHalf->keys[i] = keys[i];
-            preHalf->links[i] = links[i];
-        }
-        preHalf->links[halfPos] = links[halfPos];
-        preHalf->n = halfPos;
-
-        // only copies mid element IF childs are leafs, else, mid element is already present at leaf level
-        int copyPos = halfPos;
-        if (links[0] != nullptr) { copyPos = halfPos + 1; }
-        for (int i=copyPos; i<=n; i++) {
-            postHalf->keys[i-(copyPos)] = keys[i];
-            postHalf->links[i-(copyPos)] = links[i];
-        }
-        postHalf->links[n-copyPos] = links[n];
-        postHalf->n = n-copyPos;
-
-        keys[0] = keys[halfPos];
-        links[0] = preHalf;
-        links[1] = postHalf;
-        n = 1;
-        // preHalf->isRoot = false;
-        // postHalf->isRoot = false
-        isLeaf = false;
-        if (preHalf->links[0] != nullptr) {preHalf->isLeaf = false;}
-        if (postHalf->links[0] != nullptr) {postHalf->isLeaf = false;}
-        printf("Root split done\n");
-    }
-
-    void self_draw(int level) {
-        printf("%d%s: [", level, isLeaf ? "yL" : "nL");
-        printf("%c", links[0] == nullptr ? '-' : '+');
-        for (int i=0; i<n; i++) {
-            printf("%d%c ", keys[i], links[i+1] == nullptr ? '-' : '+');
-        }
-        printf("]\n");
-        for (int i=0; i<=n; i++) {
-            if (links[i] != nullptr) {
-                links[i]->self_draw(level+1);
-            }
         }
     }
 };
@@ -548,26 +500,14 @@ int main(int argc, char *argv[]) {
             }
         }
     }
-    for (int i=0; i<imagesPathes.size(); i++) {
-        std::cout << imagesPathes[i] << std::endl;
-    }
 
     std::vector<uint> bgTextures;
     bgTextures.push_back(defaultBgTexture);
     for (int i=0; i<imagesPathes.size(); i++) {
         bgTextures.push_back( loadTexture(imagesPathes[i], bgWidth, bgHeight, bgNrChannels) );
-        std::cout << "inserting texture\n";
     }
     bgTexture = defaultBgTexture;
     int currentTexture = 0;
-
-    // scanf("%*c");
-    // std::string fn = "filename.conf";
-    // if (fn.substr(fn.find_last_of(".") + 1) == "conf") {
-    //     std::cout << "Yes..." << std::endl;
-    // } else {
-    //     std::cout << "No..." << std::endl;
-    // }
 
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
@@ -610,17 +550,8 @@ int main(int argc, char *argv[]) {
     btree.isRoot = true;
     btree.t = M;
     Vector2i cam;
-    // srand(42069);
-    // for (int i=1; i<=17; i++) {
-    //     // int r = rand()%1000;
-    //     printf("INSERTING %d\n", i);
-    //     btree.insert(i);
-    //     btree.report();
-    //
-    //     btree.self_draw(1);
-    // }
 
-    int nextInsert = 0;
+    int nextInsert = 100;
     double insertCooldown = 0.2;
     double bgChangeCooldown = 0.2;
     double lastTimeRecord = glfwGetTime();
@@ -677,9 +608,6 @@ int main(int argc, char *argv[]) {
             printf("bgTexture: %d\n", currentTexture);
         }
         lastTimeRecord = actualTimeRecord;
-        // viewMatrix = glm::rotate(viewMatrix, 0.01f, glm::vec3(0.0f, 0.0f, 1.0f));
-        // if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS)
-        //     printf("right\n");
         glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         glBindBuffer(GL_ARRAY_BUFFER, VBO);
@@ -693,9 +621,7 @@ int main(int argc, char *argv[]) {
         glm::vec2 transform = glm::vec2(0.0f, 0.0f);
 
         int transformLoc = glGetUniformLocation(textureSP, "transform");
-        // std::cout << transformLoc << std::endl;
         int projectionLoc = glGetUniformLocation(textureSP, "projection");
-        // std::cout << "cell projection " << projectionLoc << std::endl;
         if (projectionLoc < 0) {
             std::cout << "fail getting projection uniform location\n";
         }
@@ -734,36 +660,15 @@ int main(int argc, char *argv[]) {
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, TEBO);
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(fontIndices), fontIndices, GL_STATIC_DRAW);
 
-        // std::cout << glGetError() << std::endl;
         transformLoc = glGetUniformLocation(textSP, "transform");
         projectionLoc = glGetUniformLocation(textSP, "projection");
         int cropLoc = glGetUniformLocation(textSP, "crop");
         viewLoc = glGetUniformLocation(textSP, "view");
-        // std::cout << "transform " << transformLoc << std::endl;
-        // std::cout << "projection " << projectionLoc << std::endl;
-        // std::cout << "crop " << cropLoc << std::endl;
-        // std::cout << "view " << viewLoc << std::endl;
-
-        int errorIndex = 0;
-        GLenum errorCode = glGetError();
-        while (errorCode != GL_NO_ERROR) {
-            std::cout << errorIndex << ": " << errorCode << std::endl;
-            errorIndex++;
-            errorCode = glGetError();
-        }
-
 
         glm::mat4 fontViewMatrix = viewMatrix;
         glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, glm::value_ptr(projection));
         glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(viewMatrix));
         btree.writeKeyNumbers(transformLoc, cropLoc, fontWidth, fontHeight, fontIndices);
-        // int errorIndex = 0;
-        // GLenum errorCode = glGetError();
-        // while (errorCode != GL_NO_ERROR) {
-        //     std::cout << errorIndex << ": " << std::hex << errorCode << std::endl;
-        //     errorIndex++;
-        //     errorCode = glGetError();
-        // }
 
         glUseProgram(lineSP);
         // glBindTexture(GL_TEXTURE_2D, cellTexture);
